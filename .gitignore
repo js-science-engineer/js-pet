@@ -1,0 +1,22 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 发布二进制：单个文件超过 GitHub 100MB 上限，不进版本库，
+# 请上传到 GitHub Releases（详见 releases/README.md）
+releases/*/bin/*
+!releases/*/bin/.gitkeep
+
+# 临时调试
+tmpdbg/
+*.log
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+*.swp

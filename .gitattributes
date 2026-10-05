@@ -1,0 +1,18 @@
+# 默认按文本处理，统一 LF 换行（跨 Windows / macOS 协作）
+* text=auto eol=lf
+
+# 图片与二进制资源按原样存储，禁止换行转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.exe binary
+*.dmg binary
+*.zip binary
+
+# 明确文本类型，便于 diff
+*.js   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
