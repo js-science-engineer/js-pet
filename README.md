@@ -14,18 +14,20 @@
 
 ### 当前版本：v0.1.0
 
-| 版本 | 文件名 | 说明 |
+| 版本 | 直接下载 | 说明 |
 |---|---|---|
-| Windows 安装版（推荐） | `js-pet-0.1.0-setup.exe` | 双击安装，自动建桌面/开始菜单快捷方式，可在"控制面板"卸载 |
-| Windows 绿色版 | `js-pet-0.1.0-portable.exe` | 单文件，双击即用，不写注册表，适合放 U 盘 |
+| **Windows 安装版（推荐）** | [**⬇ 下载 setup.exe**](https://github.com/js-science-engineer/js-pet/releases/latest/download/js-pet-0.1.0-setup.exe) | 双击安装，自动建桌面/开始菜单快捷方式，可在"控制面板"卸载 |
+| **Windows 绿色版** | [**⬇ 下载 portable.exe**](https://github.com/js-science-engineer/js-pet/releases/latest/download/js-pet-0.1.0-portable.exe) | 单文件，双击即用，不写注册表，适合放 U 盘 |
 | macOS | 暂无预编译包 | 需要在 Mac 上自行构建，见 [从源码构建](docs/05-从源码构建.md) |
 
-安装包请在仓库的 **Releases** 页面下载（仓库根目录只放源码，二进制见 `releases/` 说明）。
+全部版本与历史记录：[**Releases 页面**](https://github.com/js-science-engineer/js-pet/releases)
+（仓库根目录只放源码，安装包体积超 GitHub 单文件上限，统一放在 Releases 里）
 
 **安装步骤（Windows）**
 
-1. 下载 `js-pet-0.1.0-setup.exe`
+1. 点上面的下载链接（或到 Releases 页面）下载 `js-pet-0.1.0-setup.exe`
 2. 双击运行；若弹出"Windows 已保护你的电脑"（SmartScreen），点 **更多信息 → 仍要运行**
+   （安装包未购买代码签名证书，属正常现象）
 3. 选择安装位置（默认即可），点击安装
 4. 首次启动后，宠物会出现在**桌面右下角**
 
