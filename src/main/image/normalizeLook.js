@@ -66,8 +66,65 @@ function scaleToTarget(png) {
 }
 
 /**
+ * 宽容解码：把用户上传的图片（PNG/JPG）统一解成 RGBA 像素。
+ * ---------------------------------------------------------------
+ * pngjs 是严格解码器：IEND 之后有任何尾随字节就抛
+ * "unrecognised content at end of stream"——截图工具/聊天软件/AI
+ * 生图工具经常在 PNG 尾部附加元数据，不能因此拒收用户图片。
+ * 策略：
+ *   1. PNG：截掉 IEND 之后的尾随数据再用 pngjs 解；
+ *   2. 失败或非 PNG（jpg 等）：回退 Electron nativeImage（主进程可用）；
+ *   3. 都不行才抛友好错误。
+ * @returns {{width:number,height:number,data:Uint8Array}} RGBA
+ */
+function decodeImage(buf) {
+  const bytes = Buffer.from(buf);
+  const isPng = bytes.length > 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+
+  if (isPng) {
+    // 找 IEND chunk（固定 12 字节：长度4 + "IEND"4 + CRC4），截断尾随数据
+    const iend = bytes.lastIndexOf(Buffer.from('IEND', 'ascii'));
+    if (iend > 0 && iend + 8 <= bytes.length) {
+      try {
+        return pngToRgba(PNG.sync.read(bytes.subarray(0, iend + 8)));
+      } catch (_) { /* 落到 nativeImage 兜底 */ }
+    }
+  }
+
+  // JPG / 损坏 PNG：Electron nativeImage 能解 PNG/JPEG（主进程里可用）
+  try {
+    const { nativeImage } = require('electron');
+    const img = nativeImage.createFromBuffer(bytes);
+    if (!img.isEmpty()) {
+      const size = img.getSize();
+      const bgra = img.toBitmap(); // Windows/mac 下是 BGRA
+      const data = new Uint8Array(size.width * size.height * 4);
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = bgra[i + 2];     // R
+        data[i + 1] = bgra[i + 1]; // G
+        data[i + 2] = bgra[i];     // B
+        data[i + 3] = bgra[i + 3]; // A
+      }
+      return { width: size.width, height: size.height, data };
+    }
+  } catch (_) { /* 非 Electron 环境（CLI/测试） */ }
+
+  try {
+    return pngToRgba(PNG.sync.read(bytes)); // 最后再试一次原始严格解码
+  } catch (_) {
+    throw new Error('图片无法解码：请使用标准的 png 或 jpg 格式图片');
+  }
+}
+
+/** pngjs PNG 对象 → {width,height,data}（data 已是 RGBA，直接引用） */
+function pngToRgba(png) {
+  return { width: png.width, height: png.height, data: png.data };
+}
+
+/**
  * 归一化一张原图。
- * @param {Buffer|Uint8Array} buf 原始 PNG 文件内容
+ * @param {Buffer|Uint8Array} buf 原始图片文件内容（PNG/JPG）
  * @param {{satThreshold?:number, label?:string}} opts
  * @returns {{png:PNG, info:object}} png 为 720x900 的 PNG 对象，info 为过程数据
  */
@@ -76,7 +133,8 @@ function normalizeBuffer(buf, opts) {
   const label = o.label || 'image';
   const sat = Number.isFinite(o.satThreshold) ? o.satThreshold : 9;
 
-  const png = PNG.sync.read(Buffer.from(buf));
+  const decoded = decodeImage(buf);
+  const png = { width: decoded.width, height: decoded.height, data: decoded.data };
   const bg = K.detectBackground(png.data, png.width, png.height);
   K.keyOut(png.data, png.width, png.height, { mode: bg.mode, satThreshold: sat });
 
