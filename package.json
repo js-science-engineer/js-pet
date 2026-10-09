@@ -1,6 +1,6 @@
 {
   "name": "js-pet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "js-pet — 桌面电子宠物，常驻桌面、轻度养成、数据本地持久化",
   "main": "src/main/index.js",
   "private": true,

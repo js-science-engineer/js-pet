@@ -4,15 +4,15 @@
 
 ## 一、先说明两件事
 
-1. **v0.1.0 暂未提供 macOS 预编译包**。macOS 的 dmg 只能在 Mac 上打包，
+1. **v0.1.1 暂未提供 macOS 预编译包**。macOS 的 dmg 只能在 Mac 上打包，
    请按 [从源码构建](05-从源码构建.md) 在 Mac 上生成，生成的 dmg 就可以像普通安装包一样分发。
 2. **安装包未做代码签名与公证**（Apple 开发者账号 $99/年）。因此首次打开会被
    macOS 的 Gatekeeper 拦下。**这是正常现象**，按下面的方法放行一次即可，之后正常双击启动。
 
 ## 二、安装步骤
 
-1. 双击 `js-pet-0.1.0-arm64.dmg`（Apple Silicon，M 系列芯片）
-   或 `js-pet-0.1.0-x64.dmg`（Intel 芯片）
+1. 双击 `js-pet-0.1.1-arm64.dmg`（Apple Silicon，M 系列芯片）
+   或 `js-pet-0.1.1-x64.dmg`（Intel 芯片）
    > 不确定芯片类型：左上角苹果菜单 → 关于本机，看"芯片"一栏；写着 Apple M… 就用 arm64。
 2. 把 **js-pet** 图标拖进 **Applications（应用程序）** 文件夹
 3. 打开"启动台"或"应用程序"，**右键点击 js-pet → 打开**

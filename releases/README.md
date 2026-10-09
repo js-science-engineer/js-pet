@@ -24,6 +24,12 @@ releases/
 │       ├── js-pet-0.1.0-setup.exe
 │       ├── js-pet-0.1.0-portable.exe
 │       └── .gitkeep
+├── v0.1.1/                   当前版本
+│   ├── RELEASE-NOTES.md
+│   └── bin/
+│       ├── js-pet-0.1.1-setup.exe
+│       ├── js-pet-0.1.1-portable.exe
+│       └── .gitkeep
 └── v0.2.0/                   未来版本沿用同样结构
     ├── RELEASE-NOTES.md
     └── bin/
