@@ -16,11 +16,16 @@
   const SLOTS = window.JsPetLookSlots;
   const Stats = window.JsPetStats;
   const DragCtl = window.JsPetDrag;
+  const Wander = window.JsPetWander;
+  const WanderLoop = window.JsPetWanderLoop;
 
   /* ---------------- 常量 ---------------- */
   const TURN_MS = 4200;                 // 转身总时长
   const EDGE = 60, FADE = 30;           // 贴图可见窗 ±60°，相邻窗重叠永不黑屏
-  const ACTS = ['wave', 'excited', 'dance', 'jump', 'walk', 'look', 'turn', 'wiggle', 'surprise', 'nod'];
+  // ⚠️ 'walk' 是**位移动作**，只允许漫游（桌面散步）使用。
+  //    曾经把它放进随机空闲表演里，导致"关了散步宠物还在原地踏步"——
+  //    用户看到就是"停止散步没用"。不要再加回来。
+  const ACTS = ['wave', 'excited', 'dance', 'jump', 'look', 'turn', 'wiggle', 'surprise', 'nod'];
   const FACE_FLIP = [false, false, false, true];   // 第 4 面用侧面镜像
 
   const SAY = {
@@ -55,7 +60,6 @@
   let size = 150;
   let lastPos = null;
   let persistTimer = 0;
-  let wanderEnabled = false;
 
   /* ---------------- DOM ---------------- */
   const layer = document.getElementById('petLayer');
@@ -363,26 +367,82 @@
     }, 2000);
   }
 
-  /* ---------------- 漫游模式 ---------------- */
-  let wanderBusy = false;
-  let wanderTimer = 0;
-  function wanderStep() {
-    if (!wanderEnabled) { wanderBusy = false; return; }
-    wanderBusy = true;
-    const dir = Math.random() < 0.5 ? -1 : 1;
-    const dist = 40 + Math.round(Math.random() * 90);
-    if (lastPos) {
-      api.win.moveBy(dir * dist, 0).then(function (pos) {
-        if (pos) lastPos = pos;
-      }).catch(function () {});
-    }
-    wanderTimer = setTimeout(wanderStep, 2600 + Math.random() * 2600);
+  /* ---------------- 漫游模式（M9：按真实屏幕边界规划，遇边掉头） ----------------
+   * 「桌面散步」是**开/关**开关：点一下开始散步，再点一下**立刻停止**。
+   * 强制停止由 WanderLoop 的 token 机制保证：在途的那一步一旦发现被作废就收手，
+   * 既不移动宠物、也不重排定时器（详见 shared/wanderLoop.js 的注释）。
+   * -------------------------------------------------------------------------- */
+  let wanderDir = 0;              // 0 = 未定，1 = 向右，-1 = 向左
+  let wanderBusy = false;         // 是否有漫游步骤正在异步执行中
+  let displaysCache = null;
+  let displaysAt = 0;
+
+  /** 显示器工作区缓存 30s（漫游期间屏幕很少变化，避免每步都 IPC） */
+  function refreshDisplays() {
+    if (!api.win || !api.win.displays) return Promise.resolve(null);
+    if (displaysCache && Date.now() - displaysAt < 30000) return Promise.resolve(displaysCache);
+    return Promise.resolve(api.win.displays()).then(function (list) {
+      if (list && list.length) { displaysCache = list; displaysAt = Date.now(); }
+      return displaysCache;
+    }).catch(function () { return displaysCache; });
   }
+
+  /** 屏幕变化后让缓存立即失效（配合主进程 win:restored 事件） */
+  function invalidateDisplays() { displaysCache = null; displaysAt = 0; }
+
+  /** 停止散步时的姿态收尾：立刻退出走动姿态，不再"原地踏步" */
+  function stopWalkPose() {
+    if (cur === 'walk') setIdle();
+  }
+
+  const wanderLoop = WanderLoop ? WanderLoop.createWanderLoop({
+    minDelay: 2600,
+    maxDelay: 5200,
+    onStop: stopWalkPose,
+    step: function (isStale) {
+      if (!api.win || !api.win.getBounds || !api.win.moveBy) return null;
+      wanderBusy = true;
+      let b0 = null;
+      return Promise.resolve(api.win.getBounds())
+        .then(function (b) {
+          if (isStale()) return null;      // 途中被停止 → 连边界都不用读下去了
+          b0 = b;
+          return refreshDisplays();
+        })
+        .then(function (list) {
+          if (isStale()) return null;
+          if (!b0 || !Wander) return null;
+          // 关键：用**窗口真实边界 + 真实工作区**算这一步，越界前主动掉头
+          const plan = Wander.planStep({
+            bounds: b0,
+            displays: list || [],
+            dir: wanderDir,
+            rand: Math.random,
+          });
+          wanderDir = plan.dir;
+          if (!plan.dx) { invalidateDisplays(); return null; }  // 拿不到屏幕信息：这一步不走
+          if (Math.random() < 0.55) play('walk');
+          if (isStale()) return null;      // 动宠物前的最后一道复查
+          return api.win.moveBy(plan.dx, 0).then(function (pos) {
+            if (pos) lastPos = pos;
+            // 被主进程钳住（没能移动）→ 立刻反向，避免贴着边缘卡死
+            if (pos && Math.abs(pos.x - b0.x) < 1) wanderDir = -plan.dir;
+          });
+        })
+        .catch(function () {})
+        .then(function () { wanderBusy = false; });
+    },
+  }) : null;
+
+  /**
+   * 桌面散步开关。
+   * 关：立刻作废在途步骤 + 清定时器 + 收掉走动姿态 —— 点了就真的停。
+   */
   function setWander(on) {
-    wanderEnabled = !!on;
-    clearTimeout(wanderTimer);
-    if (wanderEnabled) wanderStep();
-    else wanderBusy = false;
+    if (!wanderLoop) return;
+    if (on) { wanderLoop.start(); return; }
+    wanderLoop.stop();
+    stopWalkPose();   // 循环本就没在跑时也要收姿态（stop() 不会再回调 onStop）
   }
 
   /* ---------------- 养成状态 → 表现（M3-7） ---------------- */
@@ -509,6 +569,24 @@
       if (Number.isFinite(st.size)) setSize(st.size);
       if (typeof st.wanderEnabled === 'boolean') setWander(st.wanderEnabled);
     });
+
+    // M9：主进程巡检发现窗口越界并纠正后，同步本地坐标并刷新屏幕信息
+    api.on('win:restored', function (m) {
+      if (m && m.position) lastPos = m.position;
+      invalidateDisplays();
+    });
+
+    // M9 兜底自查：显示器变化（拔屏/改分辨率/改缩放）后屏幕信息作废并请求校正
+    if (window.screen && window.screen.addEventListener) {
+      try {
+        window.screen.addEventListener('change', function () {
+          invalidateDisplays();
+          if (api.win && api.win.ensureVisible) {
+            api.win.ensureVisible().catch(function () {});
+          }
+        });
+      } catch (_) {}
+    }
 
     // M6：托盘/右键菜单触发的互动，给宠物对应的动作与台词反馈
     api.on('pet:act', function (m) {

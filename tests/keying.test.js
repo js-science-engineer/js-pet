@@ -185,3 +185,73 @@ test('M4b · greenThresholds 下限 40、按背景色差 70% 推算', () => {
   assert.equal(th2.gr, 40, '色差小时取下限 40');
   assert.equal(K.greenThresholds(null).gr, 98, '缺省背景 [0,140,30] → (140-0)*0.7=98');
 });
+
+/* ============================================================================
+ * M9 · 边缘颜色回渗（edgeColorBleed）
+ * ----------------------------------------------------------------------------
+ * 事故背景：抠图后边缘半透明像素的 RGB 残留"角色×背景"混合脏色
+ * （实测内置形象边缘平均 RGB≈82，本体≈172）。浏览器缩小贴图时按
+ * alpha 预乘采样，脏色被混进角色 —— 浅色壁纸上一圈发暗发脏的边。
+ * ========================================================================== */
+
+test('M9 · edgeColorBleed：半透明边缘像素被回渗成本体色，alpha 不动', () => {
+  // 3x1：左 opaque 红本体、中间 1px 半透明脏暗边、右全透明
+  const img = makeImage(3, 1, (x) =>
+    x === 0 ? [200, 60, 60, 255]
+    : x === 1 ? [30, 30, 30, 128]
+    : [0, 0, 0, 0]);
+  const n = K.edgeColorBleed(img.data, 3, 1);
+  assert.equal(n, 1, '只回渗那 1 个半透明像素');
+  assert.equal(img.data[4], 200, 'R 回渗成本体红');
+  assert.equal(img.data[5], 60, 'G 回渗成本体红');
+  assert.equal(img.data[6], 60, 'B 回渗成本体红');
+  assert.equal(img.data[7], 128, 'alpha 保持 128，边缘柔和过渡不变');
+  // 两端像素一律不动
+  assert.deepEqual(
+    Array.from(img.data.subarray(0, 4)), [200, 60, 60, 255], '不透明像素不动');
+  assert.deepEqual(
+    Array.from(img.data.subarray(8, 12)), [0, 0, 0, 0], '全透明像素不动');
+});
+
+test('M9 · edgeColorBleed：没有半透明像素就一律不动', () => {
+  const img = makeImage(2, 1, (x) =>
+    x === 0 ? [200, 60, 60, 255] : [0, 0, 0, 0]);
+  const before = Uint8Array.from(img.data);
+  assert.equal(K.edgeColorBleed(img.data, 2, 1), 0, '没有半透明像素就不动');
+  assert.deepEqual(Array.from(img.data), Array.from(before));
+});
+
+test('M9 · edgeColorBleed：半径内找不到不透明色源时保持原样（不炸）', () => {
+  const img = makeImage(3, 3, () => [30, 30, 30, 100]);
+  const before = Uint8Array.from(img.data);
+  assert.equal(K.edgeColorBleed(img.data, 3, 3), 0, '无色源不回渗');
+  assert.deepEqual(Array.from(img.data), Array.from(before));
+});
+
+test('M9 · edgeColorBleed：radius 可配置且够不着时保持原样', () => {
+  // 5x1：色源在 x=0，半透明像素在 x=4 —— radius=3 够不着，radius=4 能回渗
+  const img = makeImage(5, 1, (x) =>
+    x === 0 ? [200, 60, 60, 255]
+    : x === 4 ? [30, 30, 30, 128]
+    : [0, 0, 0, 0]);
+  const before = Uint8Array.from(img.data);
+  assert.equal(K.edgeColorBleed(img.data, 5, 1, { radius: 3 }), 0,
+    'radius=3 够不着 4px 外的色源');
+  assert.deepEqual(Array.from(img.data), Array.from(before));
+  assert.equal(K.edgeColorBleed(img.data, 5, 1, { radius: 4 }), 1, 'radius=4 命中');
+  assert.equal(img.data[16], 200, 'R 被回渗');
+  assert.equal(img.data[19], 128, 'alpha 不动');
+});
+
+test('M9 · edgeColorBleed：距离加权偏向更近的色源', () => {
+  // 5x1：白在 x=0、黑在 x=4、半透明在 x=1 —— 离白更近，应偏向白
+  const img = makeImage(5, 1, (x) =>
+    x === 0 ? [255, 255, 255, 255]
+    : x === 1 ? [40, 40, 40, 128]
+    : x === 4 ? [0, 0, 0, 255]
+    : [0, 0, 0, 0]);
+  K.edgeColorBleed(img.data, 5, 1);
+  const v = img.data[4];
+  assert.ok(v > 128, `距离加权应偏向更近的白色源，实际 ${v}`);
+});
+

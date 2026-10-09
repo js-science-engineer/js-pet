@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('jsPet', {
     setPos: (x, y) => ipcRenderer.invoke('win:setPos', { x, y }),
     moveBy: (dx, dy) => ipcRenderer.invoke('win:moveBy', { dx, dy }),
     displays: () => ipcRenderer.invoke('win:displays'),
+    /** 可见性兜底：一旦察觉自己在屏幕外，立即请求拉回（返回 {fixed, bounds}） */
+    ensureVisible: () => ipcRenderer.invoke('win:ensureVisible'),
   },
 
   /** 养成与设置数据（PRD 第 7 章：主进程是唯一写入者） */

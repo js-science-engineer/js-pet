@@ -5,15 +5,17 @@
  * 启动顺序：单实例锁 → 注册 IPC → 建宠物窗口 → （M2 起）加载数据 → 应用状态。
  */
 
-const { app, BrowserWindow, protocol, net } = require('electron');
+const { app, BrowserWindow, protocol, net, screen } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { registerAllIpc } = require('./ipc');
-const { createPetWindow, getPetWindow } = require('./windowPet');
+const { createPetWindow, getPetWindow, ensurePetVisible, showPetAtCorner, repinPetSize } = require('./windowPet');
 const { Repository } = require('./store/repository');
 const { LooksStore } = require('./store/looksStore');
 const { applyAutoStart } = require('./autostart');
 const { mergeSettings } = require('./store/settings');
+const { VISIBLE_TOLERANCE } = require('./display');
 const { openPanel, getPanelWindow, markQuitting } = require('./windowPanel');
 const stats = require('../shared/stats');
 
@@ -36,6 +38,23 @@ if (process.env.JS_PET_SMOKE || process.env.JS_PET_DISABLE_GPU) {
   app.commandLine.appendSwitch('disable-gpu-compositing');
   app.commandLine.appendSwitch('disable-software-rasterizer');
   app.commandLine.appendSwitch('no-sandbox');
+}
+
+/**
+ * 冒烟自检必须与"用户正在运行的实例"隔离。
+ * -------------------------------------------------------------------------
+ * 开发版（electron .）与安装版共用同一个 userData（都叫 js-pet），而
+ * Electron 的单实例锁就建在 userData 下。于是：只要用户开着宠物，
+ * 冒烟进程就拿不到锁 → 立刻 app.quit() → 既没有 SMOKE_OK 也没有 SMOKE_FAIL
+ * → 冒烟永远"跑不通"，还会把 smoke-steps.json 等写脏用户的真实数据目录。
+ * 冒烟时改用 temp 下的独立目录，彻底解耦。必须在 ready 之前设置。
+ */
+if (process.env.JS_PET_SMOKE) {
+  try {
+    const smokeDir = path.join(app.getPath('temp'), 'js-pet-smoke');
+    fs.mkdirSync(smokeDir, { recursive: true });
+    app.setPath('userData', smokeDir);
+  } catch (_) {}
 }
 
 /** 单实例锁：桌面宠物只允许存在一个进程，重复双击不会出现两只 */
@@ -62,7 +81,14 @@ if (!gotLock) {
 
   app.on('second-instance', () => {
     const win = getPetWindow();
-    if (win) win.showInactive();
+    if (!win) return;
+    // 再次双击图标＝"我的宠物不见了"→ 强制拉回屏幕右下角并显示
+    try {
+      const pos = showPetAtCorner();
+      if (pos && win.webContents && !win.webContents.isDestroyed()) {
+        win.webContents.send('win:restored', { position: pos });
+      }
+    } catch (_) {}
   });
 
   app.whenReady().then(async () => {
@@ -152,7 +178,17 @@ if (!gotLock) {
         };
       },
       actions: {
-        showPet: () => { const w = getPetWindow(); if (w) w.showInactive(); },
+        showPet: () => {
+          const w = getPetWindow();
+          if (!w) return;
+          // M9 增强：不再"沿用旧坐标再兜底"，每次点击都强制落到屏幕右下角再显示，
+          // 避免窗口位置"合法可见"却落在副屏 / 被全屏窗口遮住导致"点了显示却看不见"。
+          const pos = showPetAtCorner();
+          if (!pos) return;
+          logVisibilityEvent('show-at-corner', { to: pos });
+          try { repo.patch({ position: pos }); } catch (_) {}
+          sendToPet('win:restored', { position: pos });
+        },
         hidePet: () => { const w = getPetWindow(); if (w) w.hide(); },
         feed: () => menuInteract('feed'),
         pet: () => menuInteract('pet'),
@@ -217,6 +253,57 @@ if (!gotLock) {
     const win = createPetWindow(null);
     smokeMark('pet-window-created');
 
+    /* ==========================================================================
+     * 可见性保障（M9）：桌面宠物绝不允许"跑到屏幕外"而看起来像消失
+     * --------------------------------------------------------------------------
+     * 三层保险：
+     *  1) 所有位移（win:moveBy / win:setPos / 漫游）都以**真实窗口 bounds** 钳制；
+     *  2) 显示器发生变化（拔屏/改分辨率/改缩放/远程桌面）时立即重新钳制；
+     *  3) 每 5 秒巡检一次，只要窗口不是完整落在某块工作区内就拉回来。
+     * 巡检只在"确实越界"时才动作，所以不会和拖拽/漫游打架。
+     * ======================================================================== */
+    const visibilityLogPath = path.join(dataDir, 'visibility-log.jsonl');
+    const logVisibilityEvent = (tag, detail) => {
+      try {
+        const line = JSON.stringify(Object.assign({ at: new Date().toISOString(), tag }, detail)) + '\n';
+        if (fs.existsSync(visibilityLogPath) && fs.statSync(visibilityLogPath).size > 64 * 1024) {
+          fs.writeFileSync(visibilityLogPath, ''); // 超过 64KB 清空，避免无限增长
+        }
+        fs.appendFileSync(visibilityLogPath, line);
+      } catch (_) {}
+      if (process.env.JS_PET_SMOKE) console.log('[visibility] ' + tag + ' ' + JSON.stringify(detail));
+    };
+
+    /**
+     * 允许的越界像素（来自 display.js 的 VISIBLE_TOLERANCE）。
+     * ⚠️ 绝不要改成 0：150% 缩放下 Windows 对无边框透明窗口的 DIP 换算有 1~2px
+     * 舍入误差（右边缘稳定多出 1px）。tolerance=0 会让巡检每 5 秒都判定"越界"、
+     * 反复挪窗，而每次挪窗又让尺寸涨 2px → 永不收敛，宠物永远停不下来。
+     */
+    const GUARD_TOLERANCE = VISIBLE_TOLERANCE;
+
+    const guardPetVisible = (reason) => {
+      // 尺寸看门狗先跑：反复定位会把无边框窗口越改越大（实测 +2px/次），
+      // 既是"关了散步还在动"的帮凶，也会让它最终撑满屏幕。先复位尺寸再谈位置。
+      try {
+        const drift = repinPetSize(4);
+        if (drift) logVisibilityEvent('size-drift', Object.assign({ reason }, drift));
+      } catch (_) {}
+      const r = ensurePetVisible({ tolerance: GUARD_TOLERANCE });
+      if (!r || !r.fixed) return r;
+      logVisibilityEvent('restored', { reason, from: r.from, to: r.to });
+      // 纠正后的位置同步落盘，避免重启后又恢复到越界坐标
+      try { repo.patch({ position: r.to }); } catch (_) {}
+      sendToPet('win:restored', { position: r.to });
+      return r;
+    };
+
+    guardPetVisible('boot');
+    setInterval(() => guardPetVisible('tick'), 5000).unref();
+    for (const ev of ['display-added', 'display-removed', 'display-metrics-changed']) {
+      screen.on(ev, () => guardPetVisible(ev));
+    }
+
     // 冒烟自检：JS_PET_SMOKE=1 时启动后收集错误并断言接口就绪，随后自动退出
     if (process.env.JS_PET_SMOKE) {
       const errors = [];
@@ -245,6 +332,10 @@ if (!gotLock) {
               hasLooks: !!(api && api.looks),
               hasRenderer: !!r,
               hasStage: !!document.querySelector('.pet-stage'),
+              // M9：漫游边界规划模块 + 可见性兜底通道必须就位
+              hasWander: !!window.JsPetWander,
+              hasWanderLoop: !!window.JsPetWanderLoop,
+              hasEnsureVisible: !!(api && api.win && api.win.ensureVisible),
               // H2 安全自查：渲染进程拿不到任何 Node 能力
               nodeIsolated: typeof require === 'undefined' &&
                 typeof process === 'undefined' &&

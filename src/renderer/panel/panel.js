@@ -166,6 +166,7 @@
 
   /* ---------------- 设置页签 ---------------- */
   let applying = false;
+  let pendingPatch = null;   // 提交期间暂存的设置，合并后补发（绝不静默丢弃）
 
   function refreshSettings() {
     api.settings.get().then(function (s) {
@@ -181,7 +182,15 @@
   }
 
   function applySettings(patch, done) {
-    if (applying) return;
+    // ⚠️ 这里曾经是 `if (applying) return;`：正在提交时把用户的点击**静默丢掉**，
+    //    表现就是"点了『允许在桌面上散步』没反应"。改为合并暂存后补发。
+    if (applying) {
+      pendingPatch = {
+        patch: Object.assign({}, pendingPatch && pendingPatch.patch, patch),
+        done: done || (pendingPatch && pendingPatch.done),
+      };
+      return;
+    }
     applying = true;
     api.settings.apply(patch).then(function (r) {
       applying = false;
@@ -192,7 +201,16 @@
         window.alert('设置失败：' + (r && r.reason));
         refreshSettings();
       }
-    }).catch(function () { applying = false; });
+      flushPending();
+    }).catch(function () { applying = false; flushPending(); });
+  }
+
+  /** 补发提交期间被合并暂存的设置 */
+  function flushPending() {
+    if (applying || !pendingPatch) return;
+    const job = pendingPatch;
+    pendingPatch = null;
+    applySettings(job.patch, job.done);
   }
 
   let sizeTimer = 0;

@@ -7,8 +7,8 @@
 
 const { ipcMain, BrowserWindow, screen, app, dialog } = require('electron');
 const fs = require('fs');
-const { clampToDisplays } = require('./display');
-const { PET_WINDOW } = require('./petWindowOptions');
+const { clampRect, ensureVisible, VISIBLE_TOLERANCE } = require('./display');
+const { getPetWindow, placePet } = require('./windowPet');
 const { mergeSettings } = require('./store/settings');
 const { applyAutoStart, readAutoStart } = require('./autostart');
 const stats = require('../shared/stats');
@@ -18,6 +18,18 @@ const flushHooks = [];
 
 function winOf(event) {
   return BrowserWindow.fromWebContents(event.sender);
+}
+
+/**
+ * 放置窗口。
+ * ⚠️ 宠物窗口必须走 placePet（setBounds + 显式逻辑尺寸）：拖拽与漫游会**每帧**
+ * 调用这里，只用 setPosition 会让窗口尺寸每次涨 2px（实测 326×406 → 805×823），
+ * 并让可见性巡检永不收敛。其他窗口退回 setPosition。
+ */
+function applyPos(win, x, y) {
+  if (win && win === getPetWindow()) return placePet(x, y);
+  win.setPosition(Math.round(x), Math.round(y), false);
+  return { x: Math.round(x), y: Math.round(y) };
 }
 
 function registerWindowIpc() {
@@ -36,12 +48,13 @@ function registerWindowIpc() {
   ipcMain.handle('win:setPos', (event, pos) => {
     const win = winOf(event);
     if (!win || win.isDestroyed()) return null;
-    const next = clampToDisplays(
-      { x: pos && pos.x, y: pos && pos.y },
-      screen.getAllDisplays(),
-      PET_WINDOW
+    const b = win.getBounds();
+    // 用真实窗口尺寸钳制（不能用固定常量，见 display.js 实测教训）
+    const next = clampRect(
+      { x: pos && pos.x, y: pos && pos.y, width: b.width, height: b.height },
+      screen.getAllDisplays()
     );
-    win.setPosition(next.x, next.y, false);
+    applyPos(win, next.x, next.y);
     return next;
   });
 
@@ -49,22 +62,35 @@ function registerWindowIpc() {
     const win = winOf(event);
     if (!win || win.isDestroyed()) return null;
     const b = win.getBounds();
-    const next = clampToDisplays(
-      { x: b.x + (delta && delta.dx || 0), y: b.y + (delta && delta.dy || 0) },
-      screen.getAllDisplays(),
-      PET_WINDOW
+    const next = clampRect(
+      { x: b.x + (delta && delta.dx || 0), y: b.y + (delta && delta.dy || 0), width: b.width, height: b.height },
+      screen.getAllDisplays()
     );
-    win.setPosition(next.x, next.y, false);
+    applyPos(win, next.x, next.y);
     return next;
   });
 
+  /** 屏幕信息：给渲染进程做漫游边界规划（必须是最新的，故不走缓存） */
   ipcMain.handle('win:displays', () => {
     const primaryId = screen.getPrimaryDisplay().id;
     return screen.getAllDisplays().map((d) => ({
       id: d.id,
       isPrimary: d.id === primaryId,
+      scaleFactor: d.scaleFactor,
       workArea: { x: d.workArea.x, y: d.workArea.y, width: d.workArea.width, height: d.workArea.height },
     }));
+  });
+
+  /** 可见性巡检（渲染进程侧兜底调用；主进程另有定时巡检） */
+  ipcMain.handle('win:ensureVisible', (event) => {
+    const win = winOf(event);
+    if (!win || win.isDestroyed()) return { fixed: false };
+    const b = win.getBounds();
+    // 必须带容差：1~2px 的 DPI 舍入溢出不是真越界（见 display.js ensureVisible 注释）
+    const next = ensureVisible(b, screen.getAllDisplays(), { tolerance: VISIBLE_TOLERANCE });
+    if (!next) return { fixed: false, bounds: b };
+    applyPos(win, next.x, next.y);
+    return { fixed: true, bounds: Object.assign({}, b, { x: next.x, y: next.y }) };
   });
 }
 

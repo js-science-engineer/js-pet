@@ -259,6 +259,62 @@
     return fixed;
   }
 
+  /**
+   * 边缘颜色回渗（edge color bleed）：把半透明边缘像素的 RGB 洗成角色本色。
+   * ---------------------------------------------------------------
+   * ⚠️ 经验教训（实测得出，勿删）：
+   *   抠图后，边缘半透明像素的 RGB 仍保留"角色×背景"的混合色（实测内置形象
+   *   边缘平均 RGB≈82，本体≈172，2009/2836 个边缘像素偏暗）。浏览器把
+   *   720px 贴图缩到 150px 显示时按 alpha 预乘采样，这些脏色会被一起混进
+   *   去粉色——浅色壁纸上表现为一圈发暗发脏的边，用户感知就是
+   *   "光影效果不好、颜色反映有问题"。
+   *   正确做法：**只改半透明像素的 RGB，绝不动 alpha**（保持边缘柔和过渡），
+   *   颜色从附近不透明像素按"距离 + alpha"加权回渗。
+   * @param {Uint8Array|Uint8ClampedArray} data RGBA
+   * @param {number} w
+   * @param {number} h
+   * @param {{radius?:number, opaqueAlpha?:number}} [opts]
+   *        radius 回渗搜索半径（切比雪夫距离，默认 3）
+   *        opaqueAlpha 视为"干净色源"的最低 alpha（默认 250）
+   * @returns {number} 被回渗的像素数
+   */
+  function edgeColorBleed(data, w, h, opts) {
+    const o = opts || {};
+    const radius = Number.isFinite(o.radius) ? Math.max(1, Math.round(o.radius)) : 3;
+    const opaqueAlpha = Number.isFinite(o.opaqueAlpha) ? o.opaqueAlpha : 250;
+
+    const snap = new Uint8Array(data);   // 快照：边算边改会把脏色当色源
+    let fixed = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const k = (y * w + x) * 4;
+        const a = snap[k + 3];
+        if (a === 0 || a >= opaqueAlpha) continue;
+        let sr = 0, sg = 0, sb = 0, sw = 0;
+        for (let dy = -radius; dy <= radius; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= h) continue;
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= w) continue;
+            const nk = (ny * w + nx) * 4;
+            const na = snap[nk + 3];
+            if (na < opaqueAlpha) continue;
+            // 越近权重越大，且色源本身要足够实
+            const wt = na * (radius + 1 - Math.sqrt(dx * dx + dy * dy)) / (radius + 1);
+            sr += snap[nk] * wt; sg += snap[nk + 1] * wt; sb += snap[nk + 2] * wt; sw += wt;
+          }
+        }
+        if (sw <= 0) continue;
+        data[k] = Math.round(sr / sw);
+        data[k + 1] = Math.round(sg / sw);
+        data[k + 2] = Math.round(sb / sw);
+        fixed++;
+      }
+    }
+    return fixed;
+  }
+
   /** 透明像素占比（用于判断图片是否本来就抠好了） */
   function transparentRatio(data, w, h) {
     let c = 0;
@@ -285,6 +341,7 @@
 
   return {
     isBgNeutral, isBgGreen, isBgGreenAt, greenThresholds, detectBackground, keyOut,
-    missedBackgroundCount, feather, despeckle, despill, transparentRatio, bbox,
+    missedBackgroundCount, feather, despeckle, despill, edgeColorBleed,
+    transparentRatio, bbox,
   };
 });

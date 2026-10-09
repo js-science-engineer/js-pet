@@ -36,6 +36,23 @@ body { -webkit-user-select: none; user-select: none; }
   cursor: grabbing;
   transform: scale(1.05);
 }
+/* 拖拽"离地"光影：影子缩小变淡、接地暖光变亮（演示版有、移植时丢了） */
+.pet-stage.dragging .pet-shadow {
+  animation: none;
+  opacity: .5;
+  transform: translateX(-50%) scale(.8) translateY(5px);
+}
+.pet-stage.dragging .pet-glow {
+  opacity: .95;
+  transform: translateX(-50%) scale(1.18);
+}
+/* 落地回弹：pet.js 在拖拽结束时会加 .settle 类（之前 CSS 没有这条规则，等于死代码） */
+.pet-stage.settle { animation: petSettle .42s cubic-bezier(.3, 1.55, .5, 1); }
+@keyframes petSettle {
+  0%   { transform: scale(1.05); }
+  55%  { transform: scale(.975); }
+  100% { transform: none; }
+}
 .pet-stage img {
   -webkit-user-drag: none; user-drag: none;
   pointer-events: none;

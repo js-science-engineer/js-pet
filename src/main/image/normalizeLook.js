@@ -155,6 +155,11 @@ function normalizeBuffer(buf, opts) {
   // 绿色去污：残留的绿幕色压回中性（眼球反射/脚部过渡带），不抠掉所以不会打洞
   const despilled = K.despill(png.data, png.width, png.height);
 
+  // 边缘颜色回渗：半透明边缘像素的"角色×背景"混合脏色洗回角色本色。
+  // 只改 RGB 不改 alpha，边缘柔和过渡保持原样；不做这一步，浅色壁纸上
+  // 会看到一圈发暗发脏的边（用户感知：光影不好、颜色反映有问题）。
+  const bled = K.edgeColorBleed(png.data, png.width, png.height);
+
   K.feather(png.data, png.width, png.height);
   const speckles = K.despeckle(png.data, png.width, png.height);
   const out = scaleToTarget(png);
@@ -170,7 +175,7 @@ function normalizeBuffer(buf, opts) {
 
   return {
     png: out,
-    info: { mode: bg.mode, missed, despilled, speckles, charW: out.charW, charH: out.charH },
+    info: { mode: bg.mode, missed, despilled, bled, speckles, charW: out.charW, charH: out.charH },
   };
 }
 
